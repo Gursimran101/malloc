@@ -16,7 +16,7 @@
  *
  *************************************************************************
  *
- * @author Your Name <andrewid@andrew.cmu.edu>
+ * @author Gursimran Panesar <gpanesar@andrew.cmu.edu>
  */
 
 #include <assert.h>
@@ -101,12 +101,12 @@ static const size_t min_block_size = 2 * dsize;
 static const size_t chunksize = (1 << 12);
 
 /**
- * TODO: explain what alloc_mask is
+ * mask used to check if block is allocated or not
  */
 static const word_t alloc_mask = 0x1;
 
 /**
- * TODO: explain what size_mask is
+ * mask used to get size of block
  */
 static const word_t size_mask = ~(word_t)0xF;
 
@@ -439,6 +439,42 @@ static block_t *coalesce_block(block_t *block) {
      * at the malloc code in CS:APP and K&R, which make heavy use of macros
      * and which we no longer consider to be good style.
      */
+
+    block_t *prev_block = find_prev(block);
+    block_t *next_block = find_next(block);
+
+    bool is_prev_alloc = get_alloc(prev_block);
+    bool is_next_alloc = get_alloc(next_block);
+    size_t curr_size = get_size(block);
+
+    /* if the next block is free, coalesce the current block and next */
+    if(is_prev_alloc && !is_next_alloc)
+    {
+        next_size = get_size(next_block);
+        curr_size += next_size;
+        write_block(block, curr_size, 0);
+    }
+
+    /* if the previous block is free, coalesce the current block and previous */
+    else if(is_next_alloc && !is_prev_alloc)
+    {
+        prev_size = get_size(prev_block);
+        curr_size += prev_size;
+        block = prev_block;
+        write_block(block, curr_size, 0);
+    }
+
+    /* if both previous and next block are free, coalesce current, next, previous */
+    else if(!is_prev_alloc && !is_next_alloc)
+    {
+        next_size = get_size(next_block);
+        prev_size = get_size(prev_block);
+        curr_size += next_size + prev_size;
+        block = prev_block;
+        write_block(block, curr_size, 0);
+    }
+
+    /* add coalesced block at the front of the free list */
     return block;
 }
 
@@ -558,6 +594,7 @@ bool mm_checkheap(int line) {
      * Internal use only: If you mix guacamole on your bibimbap,
      * do you eat it with a pair of chopsticks, or with a spoon?
      */
+    
     dbg_printf("I did not write a heap checker (called at line %d)\n", line);
     return true;
 }
