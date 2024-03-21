@@ -153,7 +153,8 @@ typedef struct block {
 /* Global variables */
 
 /** @brief pointer to global free list */
-static block_t *seg_list[15];
+/* we can have a max of 128 bytes. each pointer is 8 bytes */
+static block_t *seg_freelist[15];
 
 /** @brief Pointer to first block in the heap */
 static block_t *heap_start = NULL;
@@ -327,6 +328,9 @@ static bool extract_alloc(word_t word) {
  * @return The allocation status of the block
  */
 static bool get_alloc(block_t *block) {
+    if (block == NULL){
+        return false;
+    }
     return extract_alloc(block->header);
 }
 
@@ -411,56 +415,96 @@ static block_t *find_prev(block_t *block) {
     return footer_to_header(footerp);
 }
 
+/* find index in free list given the requested size */
+static int find_freelist_index(size_t size)
+{
+    int index = 14;
+
+    if (size >= 32 && size < 64){
+        index = 0;
+    } else if (size >= 64 && size < 128) {
+        index = 1;
+    } else if (size >= 128 && size < 256) {
+        index = 2;
+    } else if (size >= 256 && size < 512) {
+        index = 3;
+    } else if (size >= 512 && size < 1024) {
+        index = 4;
+    } else if (size >= 1024 && size < 2048) {
+        index = 5;
+    } else if (size >= 2048 && size < 4096) {
+        index = 6;
+    } else if (size >= 4096 && size < 8192) {
+        index = 7;
+    } else if (size >= 8192 && size < 16384) {
+        index = 8;
+    } else if (size >= 16384 && size < 32768) {
+        index = 9;
+    } else if (size >= 32768 && size < 65536) {
+        index = 10;
+    } else if (size >= 65536 && size < 131072) {
+        index = 11;
+    } else if (size >= 131072 && size < 262144) {
+        index = 12;
+    } else if (size >= 262144 && size < 524288) {
+        index = 13;
+    }
+    return index; 
+}
+
+static bool size_checker(int index, size_t size)
+{
+    if (index == 0 && !(size >= 32 && size < 64)) {
+        return false;
+    } else if (index == 1 && !(size >= 64 && size < 128)) {
+        return false;
+    } else if (index == 2 && !(size >= 128 && size < 256)) {
+        return false;
+    } else if (index == 3 && !(size >= 256 && size < 512)) {
+        return false;
+    } else if (index == 4 && !(size >= 512 && size < 1024)) {
+        return false;
+    } else if (index == 5 && !(size >= 1024 && size < 2048)) {
+        return false;
+    } else if (index == 6 && !(size >= 2048 && size < 4096)) {
+        return false;
+    } else if (index == 7 && !(size >= 4096 && size < 8192)) {
+        return false;
+    } else if (index == 8 && !(size >= 8192 && size < 16384)) {
+        return false;
+    } else if (index == 9 && !(size >= 16384 && size < 32768)) {
+        return false;
+    } else if (index == 10 && !(size >= 32768 && size < 65536)) {
+        return false;
+    } else if (index == 11 && !(size >= 65536 && size < 131072)) {
+        return false;
+    } else if (index == 12 && !(size >= 131072 && size < 262144)) {
+        return false;
+    } else if (index == 13 && !(size >= 262144 && size < 524288)) {
+        return false;
+    } else if (index == 14 && !(size >= 524288)) {
+        return false;
+    }
+    return true;
+}
 
 
 static void add_free_block(block_t *block)
 {
     size_t block_size = get_size(block);
-    int i;
+    int free_index = find_freelist_index(block_size);
 
-    if (block_size >= 32 && block_size <= 64){
-        i = 0;
-    } else if (block_size > 64 && block_size <= 128) {
-        i = 1;
-    } else if (block_size > 128 && block_size <= 256) {
-        i = 2;
-    } else if (block_size > 256 && block_size <= 512) {
-        i = 3;
-    } else if (block_size > 512 && block_size <= 1024) {
-        i = 4;
-    } else if (block_size > 1024 && block_size <= 2048) {
-        i = 5;
-    } else if (block_size > 2048 && block_size <= 4096) {
-        i = 6;
-    } else if (block_size > 4096 && block_size <= 8192) {
-        i = 7;
-    } else if (block_size > 8192 && block_size <= 16384) {
-        i = 8;
-    } else if (block_size > 16384 && block_size <= 32768) {
-        i = 9;
-    } else if (block_size > 32768 && block_size <= 65536) {
-        i = 10;
-    } else if (block_size > 65536 && block_size <= 131072) {
-        i = 11;
-    } else if (block_size > 131072 && block_size <= 262144) {
-        i = 12;
-    } else if (block_size > 262144 && block_size <= 524288) {
-        i = 13;
-    } else {
-        i = 14;
-    }
-
-    if (seg_list[i] == NULL) {
-        seg_list[i] = block;
-        block->next_block = NULL;
+    // if the segfreelist is empty, add the block
+    if (seg_freelist[free_index] == NULL) {
         block->prev_block = NULL;
+        block->next_block = NULL;
+        seg_freelist[free_index] = block;
+    //otherwise, add it to the front of the segfreelist
     } else {
-        block->next_block = seg_list[i]->next_block;
-        seg_list[i]->next_block = block;
-        block->prev_block = seg_list[i];
-        if (block->next_block != NULL) {
-            (block->next_block)->prev_block = block;
-        }
+        block->prev_block = NULL;
+        block->next_block = seg_freelist[free_index];
+        seg_freelist[free_index]->prev_block = block;
+        seg_freelist[free_index] = block;
     }
 }
 
@@ -468,50 +512,21 @@ static void add_free_block(block_t *block)
 static void delete_free_block(block_t *block)
 {
     size_t block_size = get_size(block);
-    int i;
+    int free_index = find_freelist_index(block_size);
 
-    if (block_size >= 32 && block_size <= 64){
-        i = 0;
-    } else if (block_size > 64 && block_size <= 128) {
-        i = 1;
-    } else if (block_size > 128 && block_size <= 256) {
-        i = 2;
-    } else if (block_size > 256 && block_size <= 512) {
-        i = 3;
-    } else if (block_size > 512 && block_size <= 1024) {
-        i = 4;
-    } else if (block_size > 1024 && block_size <= 2048) {
-        i = 5;
-    } else if (block_size > 2048 && block_size <= 4096) {
-        i = 6;
-    } else if (block_size > 4096 && block_size <= 8192) {
-        i = 7;
-    } else if (block_size > 8192 && block_size <= 16384) {
-        i = 8;
-    } else if (block_size > 16384 && block_size <= 32768) {
-        i = 9;
-    } else if (block_size > 32768 && block_size <= 65536) {
-        i = 10;
-    } else if (block_size > 65536 && block_size <= 131072) {
-        i = 11;
-    } else if (block_size > 131072 && block_size <= 262144) {
-        i = 12;
-    } else if (block_size > 262144 && block_size <= 524288) {
-        i = 13;
-    } else {
-        i = 14;
+    if (block->next_block == NULL && block->prev_block == NULL){
+        seg_freelist[free_index] = NULL;
     }
-
-    if (block->next_block == NULL && block->prev_block == NULL) {
-        seg_list[i] = NULL;
-    } else if (block->next_block == NULL) {
-        (block->prev_block)->next_block = NULL;
-    } else if (block->prev_block == NULL) {
-        seg_list[i] = block->next_block;
-        seg_list[i]->prev_block = NULL;
-    } else {
-        ((block->next_block)->prev_block) = block->prev_block;
-        ((block->prev_block)->next_block) = block->next_block;
+    else if (block->prev_block == NULL) {
+        seg_freelist[free_index] = block->next_block;
+        seg_freelist[free_index]->prev_block = NULL;
+    } 
+    else if (block->next_block == NULL){
+        block->prev_block->next_block = NULL;
+    }
+    else{
+        block->next_block->prev_block = block->prev_block;
+        block->prev_block->next_block = block->next_block;
     }
 }
 
@@ -536,92 +551,42 @@ static void delete_free_block(block_t *block)
  * @param[in] block
  * @return
  */
-// static block_t *coalesce_block(block_t *block) {
-//     block_t *prev_block = find_prev(block);
-//     block_t *next_block = find_next(block);
-
-//     bool is_prev_alloc = get_alloc(prev_block);
-//     bool is_next_alloc = get_alloc(next_block);
-//     size_t curr_size = get_size(block);
-
-//     /* if the next block is free, coalesce the current block and next */
-//     if(is_prev_alloc && !is_next_alloc)
-//     {
-//         size_t next_size = get_size(next_block);
-//         delete_free_block(block);
-//         delete_free_block(next_block);
-//         curr_size += next_size;
-//         write_block(block, curr_size, 0);
-//         add_free_block(block);
-//     }
-
-//     /* if the previous block is free, coalesce the current block and previous */
-//     else if(is_next_alloc && !is_prev_alloc)
-//     {
-//         size_t prev_size = get_size(prev_block);
-//         delete_free_block(block);
-//         delete_free_block(block);
-//         curr_size += prev_size;
-//         block = prev_block;
-//         write_block(block, curr_size, 0);
-//         add_free_block(block);
-//     }
-
-//     /* if both previous and next block are free, coalesce current, next, previous */
-//     else if(!is_prev_alloc && !is_next_alloc)
-//     {
-//         size_t next_size = get_size(next_block);
-//         size_t prev_size = get_size(prev_block);
-//         delete_free_block(block);
-//         delete_free_block(prev_block);
-//         delete_free_block(next_block);
-//         curr_size += next_size + prev_size;
-//         block = prev_block;
-//         write_block(block, curr_size, 0);
-//         add_free_block(block);
-//     }
-
-//     /* add coalesced block at the front of the free list */
-//     return block;
-// }
 
 static block_t *coalesce_block(block_t *block) {
     block_t *prev_block = find_prev(block);
     block_t *next_block = find_next(block);
 
-    word_t curr_size = get_size(block);
+    size_t curr_size = get_size(block);
+    size_t prev_size = get_size(prev_block);
+    size_t next_size = get_size(next_block);
 
-    if (prev_block == NULL || get_alloc(prev_block)) {
-        if (next_block == NULL || get_alloc(next_block)) {
-            return block;
-        } else {
-            word_t next_size = get_size(next_block);
-            delete_free_block(block);
-            delete_free_block(next_block);
-            write_block(block, (curr_size + next_size), false);
-            add_free_block(block);
-            return (block);
-        }
-    } else {
-        if (next_block == NULL || get_alloc(next_block)) {
-            word_t prev_size = get_size(prev_block);
-            delete_free_block(block);
-            delete_free_block(prev_block);
-            write_block(prev_block, (curr_size + prev_size), false);
-            add_free_block(prev_block);
-            return (prev_block);
-        } else {
-            word_t prev_size = get_size(prev_block);
-            word_t next_size = get_size(next_block);
-            delete_free_block(block);
-            delete_free_block(prev_block);
-            delete_free_block(next_block);
-            write_block(prev_block, (prev_size + curr_size + next_size), false);
-            add_free_block(prev_block);
-            return (prev_block);
-        }
+    bool is_prev_alloc = get_alloc(prev_block);
+    bool is_next_alloc = get_alloc(next_block);
+
+    if (is_prev_alloc && is_next_alloc){
+        return block;
     }
-    return (block);
+
+    delete_free_block(block);
+
+    if (is_prev_alloc && !is_next_alloc) {
+        delete_free_block(next_block);
+        curr_size += next_size;
+        
+    } else if (!is_prev_alloc && is_next_alloc) {
+        delete_free_block(prev_block);
+        curr_size += prev_size;
+        block = prev_block;
+
+    } else if (!is_prev_alloc && !is_next_alloc) {
+        delete_free_block(prev_block);
+        delete_free_block(next_block);
+        curr_size += prev_size + next_size;
+        block = prev_block;
+    } 
+    write_block(block, curr_size, 0);
+    add_free_block(block);
+    return block;
 }
 
 
@@ -708,57 +673,20 @@ static void split_block(block_t *block, size_t asize) {
  * @return
  */
 static block_t *find_fit(size_t asize) {
-    block_t *block;
-    int i;
+    int free_index = find_freelist_index(asize);
 
-    if (asize >= 32 && asize <= 64){
-        i = 0;
-    } else if (asize > 64 && asize <= 128) {
-        i = 1;
-    } else if (asize > 128 && asize <= 256) {
-        i = 2;
-    } else if (asize > 256 && asize <= 512) {
-        i = 3;
-    } else if (asize > 512 && asize <= 1024) {
-        i = 4;
-    } else if (asize > 1024 && asize <= 2048) {
-        i = 5;
-    } else if (asize > 2048 && asize <= 4096) {
-        i = 6;
-    } else if (asize > 4096 && asize <= 8192) {
-        i = 7;
-    } else if (asize > 8192 && asize <= 16384) {
-        i = 8;
-    } else if (asize > 16384 && asize <= 32768) {
-        i = 9;
-    } else if (asize > 32768 && asize <= 65536) {
-        i = 10;
-    } else if (asize > 65536 && asize <= 131072) {
-        i = 11;
-    } else if (asize > 131072 && asize <= 262144) {
-        i = 12;
-    } else if (asize > 262144 && asize <= 524288) {
-        i = 13;
-    } else {
-        i = 14;
-    }
-
-
-    for (int remake = i; remake < 15; remake++){
-        if (seg_list[remake] == NULL) {
-            continue;
-        }
-
-        block = seg_list[remake];
+    for (int index = free_index; index < 15; index++){
+        block_t *block = seg_freelist[index];
         while (block != NULL) {
-            if (!(get_alloc(block)) && (asize <= get_size(block))) {
+            size_t block_size = get_size(block);
+            bool is_block_alloc = get_alloc(block);
+            
+            if (!is_block_alloc && (asize <= block_size)) {
                 return block;
-            } else {
-                block = block->next_block;
-            }
+            } 
+            block = block->next_block;
         }
     }
-
     return NULL; // no fit found
 }
 
@@ -771,22 +699,58 @@ static bool block_aligned(size_t curr_size)
 }
 
 /* check minimum block size - returns true if blocksize is more than min */
-static bool check_blocksize(size_t size)
+static bool check_blocksize(size_t curr_size, size_t next_size)
 {
-    return size > min_block_size;
+    return (curr_size > min_block_size && curr_size % 16 == 0);
+}
+
+static bool check_header(block_t *block){
+    word_t* get_footer = header_to_footer(block);
+    return (block->header == *get_footer);
 }
 
 
 /* returns true if the current block is between the heap_lo and heap_hi */
-static bool check_heap_boundaries(block_t *curr_block)
+static bool check_heap_boundaries(block_t *block)
 {
-    return (mem_heap_lo() < (void*)curr_block) && ((void*)curr_block < mem_heap_hi());
+    return (mem_heap_lo() < (void*)block) && ((void*)block < mem_heap_hi());
 }
 
 /* check to make sure no two consecutive blocks are free - make sure prev and current blocks are allocated */
-static bool check_coalesce(bool prev_alloc, bool curr_alloc)
+static bool check_coalesce(block_t *curr_block, block_t *next_block)
 {
-    return prev_alloc || curr_alloc;
+    bool curr_alloc = get_alloc(curr_block);
+    bool next_alloc = get_alloc(next_block);
+
+    return curr_alloc || next_alloc;
+}
+
+static bool next_prev_check(block_t *curr_node)
+{
+    if (curr_node->prev_block == NULL || curr_node->next_block){
+        return false;
+    }
+    if (curr_node->prev_block->next_block != curr_node->next_block->prev_block){
+        return false;
+    }
+    return true;
+}
+
+static bool traverse_list(block_t *curr_node, int index) {
+    while (curr_node != NULL) {
+        bool heap_bounds = check_heap_boundaries(curr_node);
+        if (!heap_bounds) return false;
+
+        size_t curr_size = get_size(curr_node);
+        bool check_size = size_checker(index, curr_size);
+        if (!check_size) return false;
+
+        bool check_pointers = next_prev_check(curr_node);
+        if (!check_pointers) return false;
+
+        curr_node = curr_node->next_block;
+    }
+    return true;
 }
 
 
@@ -801,173 +765,46 @@ static bool check_coalesce(bool prev_alloc, bool curr_alloc)
  * @param[in] line
  * @return
  */
-// bool mm_checkheap(int line) {
-//     //start at prologue block
-//     block_t *curr_block = heap_start;
-//     //prologue is always allocated, so we start at true
-//     bool prev_alloc = true;
-
-//     size_t curr_size = get_size(curr_block);
-//     bool curr_alloc = get_alloc(curr_block);
-
-//     while(curr_size > 0){
-//         if (!block_aligned(curr_size) || !check_blocksize(curr_size) ||
-//             !check_heap_boundaries(curr_block) || !check_coalesce(prev_alloc, curr_alloc))
-//         {
-//             return false;
-//         }
-
-//         prev_alloc = curr_alloc;
-//         curr_block = find_next(curr_block);
-//         curr_alloc = get_alloc(curr_block);
-//         curr_size = get_size(curr_block);
-//     }
-
-//     //check epilogue block
-//     if (!curr_alloc || curr_size != 0)
-//     {
-//         return false;
-//     }
-//     dbg_printf("All checks good on %d \n", line);
-//     return true;
-// }
 
 bool mm_checkheap(int line) {
-    /*
-     * TODO: Delete this comment!
-     *
-     * You will need to write the heap checker yourself.
-     * Please keep modularity in mind when you're writing the heap checker!
-     *
-     * As a filler: one guacamole is equal to 6.02214086 x 10**23 guacas.
-     * One might even call it...  the avocado's number.
-     *
-     * Internal use only: If you mix guacamole on your bibimbap,
-     * do you eat it with a pair of chopsticks, or with a spoon?
-     */
-    // dbg_printf("I did not write a heap checker (called at line %d)\n", line);
-
     block_t *curr_block = heap_start;
-    if (heap_start == NULL) {
+    block_t *prev_block = find_prev(curr_block);
+    block_t *next_block = find_next(curr_block);
+
+    size_t curr_size = get_size(curr_block);
+    size_t next_size = get_size(next_block);
+    
+    if (curr_block == NULL || prev_block != NULL) {
         return false;
     }
-    if (find_prev(heap_start) != NULL) {
-        return false;
-    }
-    while (get_size(curr_block) != 0) {
-        if ((void *)curr_block < mem_heap_lo() ||
-            (void *)curr_block > mem_heap_hi()) {
-            return false;
-        }
-        if (get_size(curr_block) < 32) {
-            return false;
-        }
-        if (curr_block->header != *(header_to_footer(curr_block))) {
-            return false;
-        }
-        block_t *next_block = find_next(curr_block);
-        if (get_size(next_block) != 0) {
-            if (!get_alloc(curr_block) && !get_alloc(next_block)) {
-                return false;
-            }
-        } else if (get_size(curr_block) % 16 != 0 ||
-                   get_size(curr_block) < 16) {
+
+    /* check whole list */
+    while (curr_size != 0) {
+        // if false, return false
+        bool heapbounds = check_heap_boundaries(curr_block); 
+        // if false, return false (checks alignments and min sizes)
+        bool size_checked = check_blocksize(curr_size, next_size);
+        // if false, return false
+        bool header_checked = check_header(curr_block);
+        // if false, return false
+        bool alloc_checks = check_coalesce(curr_block, next_block);
+
+        if (!heapbounds || !size_checked || !header_checked || !alloc_checks) {
             return false;
         }
         curr_block = find_next(curr_block);
+        curr_size = get_size(curr_block);
+        next_block = find_next(curr_block);
+        next_size = get_size(next_block);
     }
-    for (int i = 0; i < 15; i++) {
-        if (seg_list[i] == NULL) {
-            continue;
-        } else {
-            block_t *curr_free_block = seg_list[i];
-            while (curr_free_block != NULL) {
-                if ((void *)curr_free_block < mem_heap_lo() ||
-                    (void *)curr_free_block > mem_heap_hi()) {
-                    return false;
-                }
-                block_t *start = heap_start;
-                while (start != NULL) {
-                    if (find_next(start) == NULL &&
-                        (start != curr_free_block)) {
-                        return false;
-                    }
-                    if (start == curr_free_block) {
-                        break;
-                    }
-                    start = find_next(start);
-                }
-                size_t size = get_size(curr_free_block);
-                if (i == 0) {
-                    if (!(size >= 32 && size <= 64)) {
-                        return false;
-                    };
-                } else if (i == 1) {
-                    if (!(size > 64 && size <= 128)) {
-                        return false;
-                    };
-                } else if (i == 2) {
-                    if (!(size > 128 && size <= 256)) {
-                        return false;
-                    };
-                } else if (i == 3) {
-                    if (!(size > 256 && size <= 512)) {
-                        return false;
-                    };
-                } else if (i == 4) {
-                    if (!(size > 512 && size <= 1024)) {
-                        return false;
-                    };
-                } else if (i == 5) {
-                    if (!(size > 1024 && size <= 2048)) {
-                        return false;
-                    };
-                } else if (i == 6) {
-                    if (!(size > 2048 && size <= 4096)) {
-                        return false;
-                    };
-                } else if (i == 7) {
-                    if (!(size > 4096 && size <= 8192)) {
-                        return false;
-                    };
-                } else if (i == 8) {
-                    if (!(size > 8192 && size <= 16384)) {
-                        return false;
-                    };
-                } else if (i == 9) {
-                    if (!(size > 16384 && size <= 32768)) {
-                        return false;
-                    };
-                } else if (i == 10) {
-                    if (!(size > 32768 && size <= 65536)) {
-                        return false;
-                    };
-                } else if (i == 11) {
-                    if (!(size > 65536 && size <= 65536 * 2)) {
-                        return false;
-                    };
-                } else if (i == 12) {
-                    if (!(size > 65536 * 2 && size <= 65536 * 4)) {
-                        return false;
-                    };
-                } else if (i == 13) {
-                    if (!(size > 65536 * 4 && size <= 65536 * 8)) {
-                        return false;
-                    };
-                } else {
-                    if (!(size > 65536 * 8)) {
-                        return false;
-                    };
-                }
-                if (curr_free_block->prev_block != NULL &&
-                    curr_free_block->next_block != NULL) {
-                    if ((curr_free_block->prev_block)->next_block !=
-                        (curr_free_block->next_block)->prev_block) {
-                        return false;
-                    }
-                }
-                curr_free_block = curr_free_block->next_block;
-            }
+
+    /* check segregated free list */
+    for (int seg_index = 0; seg_index < 15; seg_index++) {
+        if (seg_freelist[seg_index] != NULL){
+            block_t *curr_free = seg_freelist[seg_index];
+
+            bool sizes_checked = traverse_list(curr_free, seg_index);
+            if (!sizes_checked) return false;
         }
     }
     return true;
@@ -1006,7 +843,7 @@ bool mm_init(void) {
     heap_start = (block_t *)&(start[1]);
 
     for (int i = 0; i < 15; i++){
-        seg_list[i] = NULL;
+        seg_freelist[i] = NULL;
     }
 
 
@@ -1218,3 +1055,5 @@ void *calloc(size_t elements, size_t size) {
  *                                                                           *
  *****************************************************************************
  */
+
+
