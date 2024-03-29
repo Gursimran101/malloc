@@ -475,33 +475,33 @@ static int find_freelist_index(size_t size)
 {
     int index = 14;
 
-    if (size >= 32 && size < 64){
+    if (size == 16){
         index = 0;
-    } else if (size >= 64 && size < 128) {
+    } else if (size >= 32 && size < 64) {
         index = 1;
-    } else if (size >= 128 && size < 256) {
+    } else if (size >= 64 && size < 128) {
         index = 2;
-    } else if (size >= 256 && size < 512) {
+    } else if (size >= 128 && size < 256) {
         index = 3;
-    } else if (size >= 512 && size < 1024) {
+    } else if (size >= 256 && size < 512) {
         index = 4;
-    } else if (size >= 1024 && size < 2048) {
+    } else if (size >= 512  && size < 1024) {
         index = 5;
-    } else if (size >= 2048 && size < 4096) {
+    } else if (size >= 1024 && size < 2048) {
         index = 6;
-    } else if (size >= 4096 && size < 8192) {
+    } else if (size >= 2048  && size < 4096) {
         index = 7;
-    } else if (size >= 8192 && size < 16384) {
+    } else if (size >= 4096 && size < 8192) {
         index = 8;
-    } else if (size >= 16384 && size < 32768) {
+    } else if (size >= 8192 && size < 16384) {
         index = 9;
-    } else if (size >= 32768 && size < 65536) {
+    } else if (size >= 16384 && size < 32768) {
         index = 10;
-    } else if (size >= 65536 && size < 131072) {
+    } else if (size >= 32768 && size < 65536) {
         index = 11;
-    } else if (size >= 131072 && size < 262144) {
+    } else if (size >= 65536 && size < 131072) {
         index = 12;
-    } else if (size >= 262144 && size < 524288) {
+    } else if (size >= 131072 && size < 262144) {
         index = 13;
     }
     return index; 
@@ -509,43 +509,41 @@ static int find_freelist_index(size_t size)
 
 static bool size_checker(int index, size_t size)
 {
-    if (index == 0 && !(size >= 32 && size < 64)) {
+    if (index == 0 && !(size == 16)) {
         return false;
-    } else if (index == 1 && !(size >= 64 && size < 128)) {
+    } else if (index == 1 && !(size >= 32  && size < 64)) {
         return false;
-    } else if (index == 2 && !(size >= 128 && size < 256)) {
+    } else if (index == 2 && !(size >= 64 && size < 128 )) {
         return false;
-    } else if (index == 3 && !(size >= 256 && size < 512)) {
+    } else if (index == 3 && !(size >= 128 && size < 256)) {
         return false;
-    } else if (index == 4 && !(size >= 512 && size < 1024)) {
+    } else if (index == 4 && !(size >= 256 && size < 512)) {
         return false;
-    } else if (index == 5 && !(size >= 1024 && size < 2048)) {
+    } else if (index == 5 && !(size >= 512 && size < 1024)) {
         return false;
-    } else if (index == 6 && !(size >= 2048 && size < 4096)) {
+    } else if (index == 6 && !(size >= 1024 && size < 2048)) {
         return false;
-    } else if (index == 7 && !(size >= 4096 && size < 8192)) {
+    } else if (index == 7 && !(size >= 2048 && size < 4096)) {
         return false;
-    } else if (index == 8 && !(size >= 8192 && size < 16384)) {
+    } else if (index == 8 && !(size >= 4096 && size < 8192)) {
         return false;
-    } else if (index == 9 && !(size >= 16384 && size < 32768)) {
+    } else if (index == 9 && !(size >= 8192 && size < 16384)) {
         return false;
-    } else if (index == 10 && !(size >= 32768 && size < 65536)) {
+    } else if (index == 10 && !(size >= 16384 && size < 32768)) {
         return false;
-    } else if (index == 11 && !(size >= 65536 && size < 131072)) {
+    } else if (index == 11 && !(size >= 32768 && size < 65536)) {
         return false;
-    } else if (index == 12 && !(size >= 131072 && size < 262144)) {
+    } else if (index == 12 && !(size >= 65536 && size < 131072)) {
         return false;
-    } else if (index == 13 && !(size >= 262144 && size < 524288)) {
+    } else if (index == 13 && !(size >= 131072 && size < 262144)) {
         return false;
-    } else if (index == 14 && !(size >= 524288)) {
+    } else if (index == 14 && !(size >= 262144)) {
         return false;
     }
     return true;
 }
 
 
-<<<<<<< HEAD
-=======
 
 /**
  * @brief Writes a block starting at the given address.
@@ -603,7 +601,6 @@ static void write_block(block_t *block, size_t size, bool prev_miniblock,
 
 
 
->>>>>>> b7cda90 (footer removal (kinda) and some miniblocks (kinda))
 static void add_free_block(block_t *block)
 {
     size_t block_size = get_size(block);
@@ -668,42 +665,63 @@ static void delete_free_block(block_t *block)
  */
 
 static block_t *coalesce_block(block_t *block) {
-    block_t *prev_block = find_prev(block);
-    block_t *next_block = find_next(block);
+    
+	block_t *next_block = find_next(block);
+    size_t next_size = get_size(next_block);
+    bool is_next_alloc = get_alloc(next_block);
 
     size_t curr_size = get_size(block);
-    size_t prev_size = get_size(prev_block);
-    size_t next_size = get_size(next_block);
+	block_t *prev_block = NULL;
+	size_t prev_size = 0;
 
-    bool is_prev_alloc = get_alloc(prev_block);
-    bool is_next_alloc = get_alloc(next_block);
+	// check if previous block is miniblock by checking curr block header
+	bool is_prev_miniblock = get_prev_miniblock(block);
+	// check if previous block is allocated by checking curr block header
+	bool is_prev_alloc = get_prev_alloc(block);
+
+	// then move back so prev block is at miniblock
+	if (is_prev_miniblock && !is_prev_alloc) {
+		char *move_back = (char *)(block) - 16;
+		prev_block = (block_t *)(move_back);
+		prev_size = 16;
+	}
+	//otherwise since its not a miniblock, we do the same as before
+	else if (!is_prev_alloc) {
+		prev_block = find_prev(block);
+		prev_size = get_size(prev_block);
+	} 
+
+
+
 
     if (is_prev_alloc && is_next_alloc){
         return block;
     }
-
+	
     delete_free_block(block);
+	bool curr_alloc = false;
 
     if (is_prev_alloc && !is_next_alloc) {
         delete_free_block(next_block);
         curr_size += next_size;
-        
+        write_block(block, curr_size, is_prev_miniblock, is_prev_alloc, curr_alloc);
+
     } else if (!is_prev_alloc && is_next_alloc) {
-        delete_free_block(prev_block);
+		//check if block before prev is a miniblock (so we can set that bit)
+        bool prev_prev_miniblock = get_prev_miniblock(prev_block);
+		delete_free_block(prev_block);
         curr_size += prev_size;
         block = prev_block;
+        write_block(block, curr_size, prev_prev_miniblock, is_prev_alloc, curr_alloc);
 
     } else if (!is_prev_alloc && !is_next_alloc) {
+		bool prev_prev_miniblock = get_prev_miniblock(prev_block);
         delete_free_block(prev_block);
         delete_free_block(next_block);
         curr_size += prev_size + next_size;
         block = prev_block;
+	    write_block(block, curr_size, prev_prev_miniblock, is_prev_alloc, curr_alloc);
     } 
-<<<<<<< HEAD
-    write_block(block, curr_size, 0);
-=======
-    write_block(block, curr_size, 0, true, false);
->>>>>>> b7cda90 (footer removal (kinda) and some miniblocks (kinda))
     add_free_block(block);
     return block;
 }
@@ -723,6 +741,13 @@ static block_t *coalesce_block(block_t *block) {
 static block_t *extend_heap(size_t size) {
     void *bp;
 
+
+	block_t *epilogue = (block_t *)((char *)(mem_heap_hi()) - 7);
+	bool prev_alloc = get_prev_alloc(epilogue);
+	bool prev_miniblock = get_prev_miniblock(epilogue);
+	bool curr_alloc = false;
+
+
     // Allocate an even number of words to maintain alignment
     size = round_up(size, dsize);
     if ((bp = mem_sbrk((intptr_t)size)) == (void *)-1) {
@@ -738,11 +763,7 @@ static block_t *extend_heap(size_t size) {
 
     // Initialize free block header/footer
     block_t *block = payload_to_header(bp);
-<<<<<<< HEAD
-    write_block(block, size, false);
-=======
-    write_block(block, size, false, false, false);
->>>>>>> b7cda90 (footer removal (kinda) and some miniblocks (kinda))
+    write_block(block, size, prev_miniblock, prev_alloc, curr_alloc);
     add_free_block(block);
 
     // Create new epilogue header
@@ -771,20 +792,24 @@ static void split_block(block_t *block, size_t asize) {
     /* TODO: Can you write a precondition about the value of asize? */
 
     size_t block_size = get_size(block);
+	bool is_prev_miniblock = get_prev_miniblock(block);
+	bool prev_alloc = true;
+	bool curr_alloc = true;
 
     if ((block_size - asize) >= min_block_size) {
         block_t *block_next;
-        write_block(block, asize, true);
+        write_block(block, asize, is_prev_miniblock, prev_alloc, curr_alloc);
 
         block_next = find_next(block);
-<<<<<<< HEAD
-        write_block(block_next, block_size - asize, false);
-=======
-        write_block(block_next, block_size - asize, false, false, false);
->>>>>>> b7cda90 (footer removal (kinda) and some miniblocks (kinda))
+
+		if (asize == min_block_size) {
+			is_prev_miniblock = true;
+		} else {
+			is_prev_miniblock = false;
+		}
+        write_block(block_next, block_size - asize, is_prev_miniblock, prev_alloc, false);
         add_free_block(block_next);
     }
-
     dbg_ensures(get_alloc(block));
 }
 
@@ -963,8 +988,8 @@ bool mm_init(void) {
      * they correspond to a block footer and header respectively?
      */
 
-    start[0] = pack(0, true); // Heap prologue (block footer)
-    start[1] = pack(0, true); // Heap epilogue (block header)
+    start[0] = pack(0, true, true, true); // Heap prologue (block footer)
+    start[1] = pack(0, true, true, true); // Heap epilogue (block header)
 
     // Heap starts with first "block header", currently the epilogue
     heap_start = (block_t *)&(start[1]);
@@ -1037,7 +1062,11 @@ void *malloc(size_t size) {
 
     // Mark block as allocated
     size_t block_size = get_size(block);
-    write_block(block, block_size, true);
+	bool is_prev_miniblock = get_prev_miniblock(block);
+	bool is_prev_alloc = true;
+	bool curr_alloc = true;
+
+    write_block(block, block_size, is_prev_miniblock, is_prev_alloc, curr_alloc);
     delete_free_block(block);
 
     // Try to split the block if too large
@@ -1072,8 +1101,11 @@ void free(void *bp) {
     // The block should be marked as allocated
     dbg_assert(get_alloc(block));
 
+	bool is_prev_miniblock = get_prev_miniblock(block);
+	bool is_prev_alloc = get_prev_alloc(block);
+	bool curr_alloc = false;
     // Mark the block as free
-    write_block(block, size, false);
+    write_block(block, size, is_prev_miniblock, is_prev_alloc, curr_alloc);
     add_free_block(block);
 
     // Try to coalesce the block with its neighbors
@@ -1183,7 +1215,3 @@ void *calloc(size_t elements, size_t size) {
  *****************************************************************************
  */
 
-<<<<<<< HEAD
-
-=======
->>>>>>> b7cda90 (footer removal (kinda) and some miniblocks (kinda))
