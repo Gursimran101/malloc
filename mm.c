@@ -92,7 +92,7 @@ static const size_t wsize = sizeof(word_t);
 static const size_t dsize = 2 * wsize;
 
 /** @brief Minimum block size (bytes) */
-static const size_t min_block_size = 2 * dsize;
+static const size_t min_block_size = dsize;
 
 /**
  * @brief size of initial free block and default size for expanding heap
@@ -103,6 +103,18 @@ static const size_t chunksize = (1 << 12);
  * mask used to check if block is allocated or not
  */
 static const word_t alloc_mask = 0x1;
+
+/**
+ * mask used to check if previous block is allocated or not - second lowest bit
+ */
+static const word_t prev_alloc_mask = 0x2;
+
+
+/**
+ * mask used to check if previous block is miniblock or not
+ */
+static const word_t prev_miniblock_mask = 0x4;
+
 
 /**
  * mask used to get size of block
@@ -211,9 +223,15 @@ static size_t round_up(size_t size, size_t n) {
  * @param[in] alloc True if the block is allocated
  * @return The packed value
  */
-static word_t pack(size_t size, bool alloc) {
+static word_t pack(size_t size, bool prev_miniblock, bool prev_alloc, bool alloc) {
     word_t word = size;
-    if (alloc) {
+    if (prev_miniblock) {
+		word |= prev_miniblock;
+	}
+	if (prev_alloc) {
+		word |= prev_alloc;
+	}
+	if (alloc) {
         word |= alloc_mask;
     }
     return word;
@@ -300,14 +318,15 @@ static block_t *footer_to_header(word_t *footer) {
  * @brief Returns the payload size of a given block.
  *
  * The payload size is equal to the entire block size minus the sizes of the
- * block's header and footer.
+ * block's header. (we don't subtract the footer anymore because allocated blocks
+ * have no footers anymore)
  *
  * @param[in] block
  * @return The size of the block's payload
  */
 static size_t get_payload_size(block_t *block) {
     size_t asize = get_size(block);
-    return asize - dsize;
+    return asize - wsize;
 }
 
 /**
@@ -334,6 +353,58 @@ static bool get_alloc(block_t *block) {
     return extract_alloc(block->header);
 }
 
+
+/**
+ * @brief Returns the allocation status of the previous block given a header value.
+ *
+ * This is based on the second lowest bit of the header value.
+ *
+ * @param[in] word
+ * @return The allocation status corresponding to the previous block
+ */
+static bool extract_prev_alloc(word_t word) {
+    return (bool)(word & prev_alloc_mask);
+}
+
+/**
+ * @brief Returns the allocation status of the previous block, based on the current block's header.
+ * @param[in] block
+ * @return The allocation status of the previous block
+ */
+static bool get_prev_alloc(block_t *block) {
+    if (block == NULL){
+        return false;
+    }
+    return extract_prev_alloc(block->header);
+}
+
+
+/**
+ * @brief Returns the allocation status of a previous miniblock given a header value.
+ *
+ * This is based on the third lowest bit of the header value.
+ *
+ * @param[in] word
+ * @return The miniblock status corresponding to the previous block
+ */
+static bool extract_miniblock(word_t word) {
+    return (bool)(word & prev_miniblock_mask);
+}
+
+/**
+ * @brief Returns the status of a miniblock existing at the previous block, based on the current block's header.
+ * @param[in] block
+ * @return The miniblock status of the previous block
+ */
+static bool get_prev_miniblock(block_t *block) {
+    if (block == NULL){
+        return false;
+    }
+    return extract_miniblock(block->header);
+}
+
+
+
 /**
  * @brief Writes an epilogue header at the given address.
  *
@@ -344,27 +415,11 @@ static bool get_alloc(block_t *block) {
 static void write_epilogue(block_t *block) {
     dbg_requires(block != NULL);
     dbg_requires((char *)block == (char *)mem_heap_hi() - 7);
-    block->header = pack(0, true);
-}
 
-/**
- * @brief Writes a block starting at the given address.
- *
- * This function writes both a header and footer, where the location of the
- * footer is computed in relation to the header.
- *
- * TODO: Are there any preconditions or postconditions?
- *
- * @param[out] block The location to begin writing the block header
- * @param[in] size The size of the new block
- * @param[in] alloc The allocation status of the new block
- */
-static void write_block(block_t *block, size_t size, bool alloc) {
-    dbg_requires(block != NULL);
-    dbg_requires(size > 0);
-    block->header = pack(size, alloc);
-    word_t *footerp = header_to_footer(block);
-    *footerp = pack(size, alloc);
+	bool prev_miniblock = false;
+	bool prev_alloc = false;
+	bool curr_alloc = true;
+    block->header = pack(0, prev_miniblock, prev_alloc, curr_alloc);
 }
 
 /**
@@ -489,6 +544,66 @@ static bool size_checker(int index, size_t size)
 }
 
 
+<<<<<<< HEAD
+=======
+
+/**
+ * @brief Writes a block starting at the given address.
+ *
+ * This function writes both a header and footer, where the location of the
+ * footer is computed in relation to the header.
+ *
+ * TODO: Are there any preconditions or postconditions?
+ *
+ * @param[out] block The location to begin writing the block header
+ * @param[in] size The size of the new block
+ * @param[in] alloc The allocation status of the new block
+ */
+static void write_block(block_t *block, size_t size, bool prev_miniblock, 
+						bool prev_alloc, bool curr_alloc) {
+    dbg_requires(block != NULL);
+    dbg_requires(size > 0);
+
+	
+    block->header = pack(size, prev_miniblock, prev_alloc, curr_alloc);
+	block_t* next_block = find_next(block);
+
+	if (!curr_alloc && size > 16) 
+	// new block is free and not miniblock
+	{
+    	word_t *footerp = header_to_footer(block);
+		*footerp = pack(size, prev_miniblock, prev_alloc, curr_alloc);
+		next_block->header &= ~(prev_alloc_mask);
+		next_block->header &= ~(prev_miniblock_mask);
+	} 
+	
+	else if (!curr_alloc && size <= 16)
+	// new block is free and miniblock
+	{
+		next_block->header &= ~(prev_alloc_mask);
+        next_block->header |= prev_miniblock_mask;
+	}
+
+	else if (curr_alloc && size > 16)
+	// new block allocated and a miniblock
+	{
+		next_block->header |= prev_alloc_mask;
+        next_block->header &= ~(prev_miniblock_mask);
+	} 
+
+	else 
+	// new block allocated and not a miniblock
+	{
+		next_block->header |= prev_alloc_mask;
+        next_block->header |= prev_miniblock_mask;
+	}
+}
+
+
+
+
+
+>>>>>>> b7cda90 (footer removal (kinda) and some miniblocks (kinda))
 static void add_free_block(block_t *block)
 {
     size_t block_size = get_size(block);
@@ -584,7 +699,11 @@ static block_t *coalesce_block(block_t *block) {
         curr_size += prev_size + next_size;
         block = prev_block;
     } 
+<<<<<<< HEAD
     write_block(block, curr_size, 0);
+=======
+    write_block(block, curr_size, 0, true, false);
+>>>>>>> b7cda90 (footer removal (kinda) and some miniblocks (kinda))
     add_free_block(block);
     return block;
 }
@@ -619,7 +738,11 @@ static block_t *extend_heap(size_t size) {
 
     // Initialize free block header/footer
     block_t *block = payload_to_header(bp);
+<<<<<<< HEAD
     write_block(block, size, false);
+=======
+    write_block(block, size, false, false, false);
+>>>>>>> b7cda90 (footer removal (kinda) and some miniblocks (kinda))
     add_free_block(block);
 
     // Create new epilogue header
@@ -654,7 +777,11 @@ static void split_block(block_t *block, size_t asize) {
         write_block(block, asize, true);
 
         block_next = find_next(block);
+<<<<<<< HEAD
         write_block(block_next, block_size - asize, false);
+=======
+        write_block(block_next, block_size - asize, false, false, false);
+>>>>>>> b7cda90 (footer removal (kinda) and some miniblocks (kinda))
         add_free_block(block_next);
     }
 
@@ -1056,4 +1183,7 @@ void *calloc(size_t elements, size_t size) {
  *****************************************************************************
  */
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> b7cda90 (footer removal (kinda) and some miniblocks (kinda))
