@@ -85,6 +85,8 @@
 
 typedef uint64_t word_t;
 
+static const int SEG_LIST_SIZE = 14;
+
 /** @brief Word and header size (bytes) */
 static const size_t wsize = sizeof(word_t);
 
@@ -102,7 +104,7 @@ static const size_t chunksize = (1 << 12);
 /**
  * mask used to check if block is allocated or not
  */
-static const word_t alloc_mask = 0x1;
+static const word_t curr_alloc_mask = 0x1;
 
 /**
  * mask used to check if previous block is allocated or not - second lowest bit
@@ -125,26 +127,6 @@ typedef struct block {
     /** @brief Header contains size + allocation flag */
     word_t header;
 
-    /**
-     * @brief A pointer to the block payload.
-     *
-     * TODO: feel free to delete this comment once you've read it carefully.
-     * We don't know what the size of the payload will be, so we will declare
-     * it as a zero-length array, which is a GNU compiler extension. This will
-     * allow us to obtain a pointer to the start of the payload. (The similar
-     * standard-C feature of "flexible array members" won't work here because
-     * those are not allowed to be members of a union.)
-     *
-     * WARNING: A zero-length array must be the last element in a struct, so
-     * there should not be any struct fields after it. For this lab, we will
-     * allow you to include a zero-length array in a union, as long as the
-     * union is the last field in its containing struct. However, this is
-     * compiler-specific behavior and should be avoided in general.
-     *
-     * WARNING: DO NOT cast this pointer to/from other types! Instead, you
-     * should use a union to alias this zero-length array with another struct,
-     * in order to store additional types of data in the payload memory.
-     */
     union {
         struct {
             struct block *next_block;
@@ -152,23 +134,23 @@ typedef struct block {
         };
         char payload[0];
     };
-
-    /*
-     * TODO: delete or replace this comment once you've thought about it.
-     * Why can't we declare the block footer here as part of the struct?
-     * Why do we even have footers -- will the code work fine without them?
-     * which functions actually use the data contained in footers?
-     */
 } block_t;
 
 /* Global variables */
 
 /** @brief pointer to global free list */
-/* we can have a max of 128 bytes. each pointer is 8 bytes */
-static block_t *seg_freelist[15];
+/* we can have a max of 128 bytes. each pointer is 8 bytes (one less than from 
+ * checkpoint because we have a miniblocks list, which is a pointer of 8 bytes) 
+*/
+static block_t *seg_freelist[14];
 
 /** @brief Pointer to first block in the heap */
 static block_t *heap_start = NULL;
+
+/** @brief pointer to global free list of miniblocks */
+/* we can have a max of 128 bytes. each pointer is 8 bytes */
+static block_t *miniblock_list = NULL;
+
 
 /*
  *****************************************************************************
@@ -189,6 +171,25 @@ static block_t *heap_start = NULL;
  *                        BEGIN SHORT HELPER FUNCTIONS
  * ---------------------------------------------------------------------------
  */
+
+static size_t find_freelist_index(size_t size);
+static bool size_checker(int index, size_t size);
+
+static void write_block(block_t *block, size_t size, bool prev_miniblock, 
+						bool prev_alloc, bool curr_alloc);
+static void add_free_block(block_t *block);
+static void delete_free_block(block_t *block);
+static block_t *coalesce_block(block_t *block);
+static block_t *extend_heap(size_t size);
+static void split_block(block_t *block, size_t asize);
+static block_t *find_fit(size_t asize);
+bool mm_init(void);
+void *malloc(size_t size);
+void free(void *bp);
+void *realloc(void *ptr, size_t size);
+void *calloc(size_t elements, size_t size);
+
+
 
 /**
  * @brief Returns the maximum of two integers.
@@ -225,13 +226,13 @@ static size_t round_up(size_t size, size_t n) {
 static word_t pack(size_t size, bool prev_miniblock, bool prev_alloc, bool alloc) {
     word_t word = size;
     if (prev_miniblock) {
-		word |= (1L << 2);
+		word |= prev_miniblock_mask;
 	}
 	if (prev_alloc) {
-		word |= (1L << 1);
+		word |= prev_alloc_mask;
 	}
 	if (alloc) {
-        word |= (1L);
+        word |= curr_alloc_mask;
     }
     return word;
 }
@@ -337,7 +338,7 @@ static size_t get_payload_size(block_t *block) {
  * @return The allocation status correpsonding to the word
  */
 static bool extract_alloc(word_t word) {
-    return (bool)(word & alloc_mask);
+    return (bool)(word & curr_alloc_mask);
 }
 
 /**
@@ -346,9 +347,9 @@ static bool extract_alloc(word_t word) {
  * @return The allocation status of the block
  */
 static bool get_alloc(block_t *block) {
-    if (block == NULL){
-        return false;
-    }
+    // if (block == NULL){
+    //     return false;  // we return true because if block is NULL, we don't want to do anything with it
+    // }
     return extract_alloc(block->header);
 }
 
@@ -371,9 +372,9 @@ static bool extract_prev_alloc(word_t word) {
  * @return The allocation status of the previous block
  */
 static bool get_prev_alloc(block_t *block) {
-    if (block == NULL){
-        return false;
-    }
+    // if (block == NULL){
+    //     return false; // we return true because if block is NULL, we don't want to do anything with it
+    // }
     return extract_prev_alloc(block->header);
 }
 
@@ -396,12 +397,11 @@ static bool extract_miniblock(word_t word) {
  * @return The miniblock status of the previous block
  */
 static bool get_prev_miniblock(block_t *block) {
-    if (block == NULL){
-        return false;
-    }
+    // if (block == NULL){
+    //     return false;
+    // }
     return extract_miniblock(block->header);
 }
-
 
 
 /**
@@ -420,6 +420,7 @@ static void write_epilogue(block_t *block) {
 	bool curr_alloc = true;
     block->header = pack(0, prev_miniblock, prev_alloc, curr_alloc);
 }
+
 
 /**
  * @brief Finds the next consecutive block on the heap.
@@ -461,6 +462,7 @@ static word_t *find_prev_footer(block_t *block) {
  * @return The previous consecutive block in the heap.
  * @pre The block is not the prologue
  */
+
 static block_t *find_prev(block_t *block) {
     dbg_requires(block != NULL);
     dbg_requires(get_size(block) != 0 &&
@@ -469,76 +471,74 @@ static block_t *find_prev(block_t *block) {
     return footer_to_header(footerp);
 }
 
-/* find index in free list given the requested size */
-static int find_freelist_index(size_t size)
-{
-    int index = 14;
 
-    if (size == 16){
+
+/* find index in free list given the requested size */
+static size_t find_freelist_index(size_t size)
+{
+    size_t index = 13;
+
+    if (size >= 32 && size < 64) {
         index = 0;
-    } else if (size >= 16 && size < 32) {
-        index = 1;
-    } else if (size >= 32 && size < 64) {
-        index = 2;
     } else if (size >= 64 && size < 128) {
-        index = 3;
+        index = 1;
     } else if (size >= 128 && size < 256) {
+        index = 2;
+    } else if (size >= 256 && size < 512) {
+        index = 3;
+    } else if (size >= 512 && size < 1024) {
         index = 4;
-    } else if (size >= 256  && size < 512) {
+    } else if (size >= 1024 && size < 2048) {
         index = 5;
-    } else if (size >= 512 && size < 1028) {
-        index = 6;
-    } else if (size >= 1028  && size < 2048) {
-        index = 7;
     } else if (size >= 2048 && size < 4096) {
-        index = 8;
+        index = 6;
     } else if (size >= 4096 && size < 8192) {
-        index = 9;
+        index = 7;
     } else if (size >= 8192 && size < 16384) {
-        index = 10;
+        index = 8;
     } else if (size >= 16384 && size < 32768) {
-        index = 11;
+        index = 9;
     } else if (size >= 32768 && size < 65536) {
-        index = 12;
+        index = 10;
     } else if (size >= 65536 && size < 131072) {
-        index = 13;
-    }
-    return index; 
+        index = 11;
+    } else if (size >= 131072 && size < 262144) {
+		index = 12;
+    } 
+    return index;
 }
 
 static bool size_checker(int index, size_t size)
 {
-    if (index == 0 && !(size == 16)) {
+    if (index == 0 && !(size >= 32 && size < 64 )) {
         return false;
-    } else if (index == 1 && !(size >= 16  && size < 32)) {
+    } else if (index == 1 && !(size >= 64 && size < 128)) {
         return false;
-    } else if (index == 2 && !(size >= 32 && size < 64 )) {
+    } else if (index == 2 && !(size >= 128 && size < 256)) {
         return false;
-    } else if (index == 3 && !(size >= 64 && size < 128)) {
+    } else if (index == 3 && !(size >= 256 && size < 512)) {
         return false;
-    } else if (index == 4 && !(size >= 128 && size < 256)) {
+    } else if (index == 4 && !(size >= 512 && size < 1024)) {
         return false;
-    } else if (index == 5 && !(size >= 256 && size < 512)) {
+    } else if (index == 5 && !(size >= 1024 && size < 2048)) {
         return false;
-    } else if (index == 6 && !(size >= 512 && size < 1024)) {
+    } else if (index == 6 && !(size >= 2048 && size < 4096)) {
         return false;
-    } else if (index == 7 && !(size >= 1024 && size < 2048)) {
+    } else if (index == 7 && !(size >= 4096 && size < 8192)) {
         return false;
-    } else if (index == 8 && !(size >= 2048 && size < 4096)) {
+    } else if (index == 8 && !(size >= 8192 && size < 16384)) {
         return false;
-    } else if (index == 9 && !(size >= 4096 && size < 8192)) {
+    } else if (index == 9 && !(size >= 16384 && size < 32768)) {
         return false;
-    } else if (index == 10 && !(size >= 8192 && size < 16384)) {
+    } else if (index == 10 && !(size >= 32768 && size < 65536)) {
         return false;
-    } else if (index == 11 && !(size >= 16384 && size < 32768)) {
+    } else if (index == 11 && !(size >= 65536 && size < 131072)) {
         return false;
-    } else if (index == 12 && !(size >= 32768 && size < 65536)) {
+    } else if (index == 12 && !(size >= 131072 && size < 262144)) {
         return false;
-    } else if (index == 13 && !(size >= 65536 && size < 131072)) {
-        return false;
-    } else if (index == 14 && !(size >= 131072)) {
-        return false;
-    }
+    } else if (index == 13 && !(size > 262144)) {
+		return false;
+	}
     return true;
 }
 
@@ -599,12 +599,21 @@ static void write_block(block_t *block, size_t size, bool prev_miniblock,
 
 
 
-
 static void add_free_block(block_t *block)
 {
     size_t block_size = get_size(block);
-    int free_index = find_freelist_index(block_size);
+    size_t free_index = find_freelist_index(block_size);
 
+	if (block_size == 16) {
+		if (miniblock_list != NULL){
+			block->next_block = miniblock_list->next_block;
+			miniblock_list->next_block = block;
+		} else {
+			miniblock_list = block;
+			miniblock_list->next_block = NULL;
+		}
+		return;
+	}
     // if the segfreelist is empty, add the block
     if (seg_freelist[free_index] == NULL) {
         block->prev_block = NULL;
@@ -623,14 +632,33 @@ static void add_free_block(block_t *block)
 static void delete_free_block(block_t *block)
 {
     size_t block_size = get_size(block);
-    int free_index = find_freelist_index(block_size);
+    size_t free_index = find_freelist_index(block_size);
+
+
+	if (block_size == 16) {
+        block_t *curr_block = miniblock_list;
+        if (curr_block == block) {
+            miniblock_list = block->next_block;
+            return;
+        }
+        while (curr_block != NULL) {
+            if (curr_block->next_block == block) {
+                curr_block->next_block = block->next_block;
+                return;
+            }
+            else {
+                curr_block = curr_block->next_block;
+            }
+        }
+        return;
+	}
+
 
     if ((block->next_block == NULL) && (block->prev_block == NULL)){
         seg_freelist[free_index] = NULL;
     }
     else if (block->prev_block == NULL) {
         seg_freelist[free_index] = block->next_block;
-
         seg_freelist[free_index]->prev_block = NULL;
     } 
     else if (block->next_block == NULL){
@@ -641,7 +669,6 @@ static void delete_free_block(block_t *block)
         block->prev_block->next_block = block->next_block;
     }
 }
-
 
 
 /*
@@ -681,9 +708,9 @@ static block_t *coalesce_block(block_t *block) {
 
 	// then move back so prev block is at miniblock start
 	if (is_prev_miniblock && !is_prev_alloc) {
-		char *move_back = (char *)(block) - 16;
-		prev_block = (block_t *)(move_back);
 		prev_size = 16;
+		char *move_back = (char *)(block) - prev_size;
+		prev_block = (block_t *)(move_back);
 	}
 	//otherwise since its not a miniblock, we do the same as before
 	else if (!is_prev_miniblock && !is_prev_alloc) {
@@ -725,6 +752,7 @@ static block_t *coalesce_block(block_t *block) {
     add_free_block(block);
     return block;
 }
+
 
 
 /**
@@ -776,6 +804,8 @@ static block_t *extend_heap(size_t size) {
     return block;
 }
 
+
+
 /**
  * @brief
  *
@@ -801,13 +831,14 @@ static void split_block(block_t *block, size_t asize) {
         write_block(block, asize, is_prev_miniblock, prev_alloc, curr_alloc);
 
         block_next = find_next(block);
+		curr_alloc = false;
 
 		if (asize == min_block_size) {
 			is_prev_miniblock = true;
 		} else {
 			is_prev_miniblock = false;
 		}
-        write_block(block_next, block_size - asize, is_prev_miniblock, prev_alloc, false);
+        write_block(block_next, block_size - asize, is_prev_miniblock, prev_alloc, curr_alloc);
         add_free_block(block_next);
     }
     dbg_ensures(get_alloc(block));
@@ -825,9 +856,9 @@ static void split_block(block_t *block, size_t asize) {
  * @return
  */
 static block_t *find_fit(size_t asize) {
-    int free_index = find_freelist_index(asize);
+    size_t free_index = find_freelist_index(asize);
 
-    for (int index = free_index; index < 15; index++){
+    for (size_t index = free_index; index < 14; index++){
         block_t *block = seg_freelist[index];
         while (block != NULL) {
             size_t block_size = get_size(block);
@@ -952,7 +983,7 @@ bool mm_checkheap(int line) {
     }
 
     /* check segregated free list */
-    for (int seg_index = 0; seg_index < 15; seg_index++) {
+    for (int seg_index = 0; seg_index < SEG_LIST_SIZE; seg_index++) {
         if (seg_freelist[seg_index] != NULL){
             block_t *curr_free = seg_freelist[seg_index];
 
@@ -995,10 +1026,11 @@ bool mm_init(void) {
     // Heap starts with first "block header", currently the epilogue
     heap_start = (block_t *)&(start[1]);
 
-    for (int i = 0; i < 15; i++){
+    for (int i = 0; i < SEG_LIST_SIZE; i++){
         seg_freelist[i] = NULL;
     }
 
+	miniblock_list = NULL;
 
     // Extend the empty heap with a free block of chunksize bytes
     if (extend_heap(chunksize) == NULL) {
@@ -1007,6 +1039,7 @@ bool mm_init(void) {
 
     return true;
 }
+
 
 /**
  * @brief
@@ -1042,7 +1075,16 @@ void *malloc(size_t size) {
     }
 
     // Adjust block size to include overhead and to meet alignment requirements
-    asize = round_up(size + dsize, dsize);
+	asize = max(round_up(size + wsize, dsize), min_block_size);
+
+
+	// LOOK FURTHER - WHY DOES THIS REDUCE UTIL AND THROUGHPUT???
+	// size_t aligned_blocksize = round_up(size + dsize, dsize);
+    // if (aligned_blocksize >= min_block_size) {
+	// 	asize = aligned_blocksize;
+	// } else {
+	// 	asize = min_block_size;
+	// }
 
     // Search the free list for a fit
     block = find_fit(asize);
@@ -1079,6 +1121,8 @@ void *malloc(size_t size) {
     return bp;
 }
 
+
+
 /**
  * @brief
  *
@@ -1089,6 +1133,8 @@ void *malloc(size_t size) {
  *
  * @param[in] bp
  */
+
+
 void free(void *bp) {
     dbg_requires(mm_checkheap(__LINE__));
 
@@ -1164,6 +1210,8 @@ void *realloc(void *ptr, size_t size) {
     return newptr;
 }
 
+
+
 /**
  * @brief
  *
@@ -1215,4 +1263,17 @@ void *calloc(size_t elements, size_t size) {
  *                                                                           *
  *****************************************************************************
  */
+
+
+
+
+
+
+
+
+
+
+
+
+
 
